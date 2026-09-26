@@ -1,114 +1,109 @@
-def read_map(filepath):
-    """
-    Đọc file layout, trả về:
-    - walls: set các tọa độ (r, c) là tường
-    - agent_start: tuple (r, c)
-    - boxes_start: frozenset các tọa độ box
-    - targets: frozenset các tọa độ đích
-    - height, width: kích thước lưới
-    """
-    walls = set()
-    boxes_start = set()
-    targets = set()
-    agent_start = None
+from collections import namedtuple
+import heapq
 
-    with open(filepath, "r") as f:
-        lines = f.readlines()
+Node = namedtuple("Node", ["path_cost", "state", "parent", "action"])
 
-    for r, line in enumerate(lines):
-        for c, ch in enumerate(line):
-            if ch == '%':
-                walls.add((r, c))
-            elif ch == 'A':
-                agent_start = (r, c)
-            elif ch == 'B':
-                boxes_start.add((r, c))
-            elif ch == 'D':
-                targets.add((r, c))
-            elif ch == 'C':
-                boxes_start.add((r, c))
-                targets.add((r, c))
+class SokobanProblem:
+    def __init__(self, filepath):
+        walls = set()
+        boxes_start = set()
+        targets = set()
+        agent_start = None
 
-    height = len(lines)
-    width = max(len(line) for line in lines)
+        with open(filepath, "r") as f:
+            lines = f.readlines()
 
-    return {
-        "walls": frozenset(walls),
-        "agent_start": agent_start,
-        "boxes_start": frozenset(boxes_start),
-        "targets": frozenset(targets),
-        "height": height,
-        "width": width,
-    }
+        for r, line in enumerate(lines):
+            for c, ch in enumerate(line):
+                if ch == '%':
+                    walls.add((r, c))
+                elif ch == 'A':
+                    agent_start = (r, c)
+                elif ch == 'B':
+                    boxes_start.add((r, c))
+                elif ch == 'D':
+                    targets.add((r, c))
+                elif ch == 'C':
+                    boxes_start.add((r, c))
+                    targets.add((r, c))
 
+        self.walls = frozenset(walls)
+        self.targets = frozenset(targets)
+        self.initial_state = (agent_start, frozenset(boxes_start))
 
-def is_goal(state, targets):
-    """Kiểm tra state hiện tại đã là trạng thái đích chưa."""
-    agent_pos, box_positions = state
-    return box_positions == targets
+    def is_goal(self, state):
+        agent_pos, box_positions = state
+        return box_positions == self.targets
 
+    def get_successors(self, state):
+        agent_pos, box_positions = state
+        directions = {
+            "North": (-1, 0), "South": (1, 0),
+            "West":  (0, -1), "East":  (0, 1),
+        }
+        successors = []
 
-def get_successors(state, walls):
-    """
-    Nhận vào 1 state (agent_pos, box_positions) và tập walls.
-    Trả về list các (action, new_state) hợp lệ.
-    """
-    agent_pos, box_positions = state
+        for action, (dr, dc) in directions.items():
+            new_agent_pos = (agent_pos[0] + dr, agent_pos[1] + dc)
 
-    directions = {
-        "North": (-1, 0),
-        "South": (1, 0),
-        "West":  (0, -1),
-        "East":  (0, 1),
-    }
-
-    successors = []
-
-    for action, (dr, dc) in directions.items():
-        new_agent_r = agent_pos[0] + dr
-        new_agent_c = agent_pos[1] + dc
-        new_agent_pos = (new_agent_r, new_agent_c)
-
-        if new_agent_pos in walls:
-            continue
-
-        if new_agent_pos in box_positions:
-            new_box_r = new_agent_r + dr
-            new_box_c = new_agent_c + dc
-            new_box_pos = (new_box_r, new_box_c)
-
-            if new_box_pos in walls or new_box_pos in box_positions:
+            if new_agent_pos in self.walls:
                 continue
 
-            new_box_positions = (box_positions - {new_agent_pos}) | {new_box_pos}
-            new_state = (new_agent_pos, new_box_positions)
-            successors.append((action, new_state))
-        else:
-            new_state = (new_agent_pos, box_positions)
-            successors.append((action, new_state))
+            if new_agent_pos in box_positions:
+                new_box_pos = (new_agent_pos[0] + dr, new_agent_pos[1] + dc)
+                if new_box_pos in self.walls or new_box_pos in box_positions:
+                    continue
+                new_box_positions = (box_positions - {new_agent_pos}) | {new_box_pos}
+                successors.append((action, (new_agent_pos, new_box_positions)))
+            else:
+                successors.append((action, (new_agent_pos, box_positions)))
 
-    return successors
+        return successors
 
 
-# ------------------- Khu vực tự kiểm tra (test) -------------------
-if __name__ == "__main__":
-    # Dữ liệu map giả lập nhỏ để test nhanh, không cần đọc file thật
-    map_data = {
-        "walls": frozenset({(0, 0), (0, 2), (2, 0), (2, 1), (2, 2)}),
-        "agent_start": (0, 1),
-        "boxes_start": frozenset({(1, 2)}),
-        "targets": frozenset({(1, 0)}),
-    }
+class UCSSolver:
+    """Chạy thuật toán UCS trên 1 SokobanProblem bất kỳ."""
 
-    initial_state = (map_data["agent_start"], map_data["boxes_start"])
-    print("State ban đầu:", initial_state)
+    def __init__(self, problem):
+        self.problem = problem
 
-    print("Đã là goal chưa?", is_goal(initial_state, map_data["targets"]))
+    def search(self):
+        start_node = Node(path_cost=0, state=self.problem.initial_state,
+                           parent=None, action=None)
 
-    print("\nCác bước đi hợp lệ từ state ban đầu:")
-    for action, new_state in get_successors(initial_state, map_data["walls"]):
-        print(f"  {action} -> {new_state}")
+        frontier = []
+        counter = 0
+        heapq.heappush(frontier, (0, counter, start_node))
+        counter += 1
 
-    # Test đọc file thật khi bạn đã có example_map.txt
-    # real_map = read_map("example_map.txt")
-    # print(real_map)
+        explored = set()
+
+        while True:
+            if not frontier:
+                return None
+
+            _, _, current_node = heapq.heappop(frontier)
+
+            if self.problem.is_goal(current_node.state):
+                return self._reconstruct_path(current_node), current_node.path_cost
+
+            if current_node.state in explored:
+                continue
+            explored.add(current_node.state)
+
+            for action, new_state in self.problem.get_successors(current_node.state):
+                new_node = Node(
+                    path_cost=current_node.path_cost + 1,
+                    state=new_state,
+                    parent=current_node,
+                    action=action,
+                )
+                heapq.heappush(frontier, (new_node.path_cost, counter, new_node))
+                counter += 1
+
+    def _reconstruct_path(self, node):
+        actions = []
+        while node.parent is not None:
+            actions.insert(0, node.action)
+            node = node.parent
+        return actions
